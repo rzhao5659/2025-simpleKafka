@@ -57,12 +57,22 @@ set(CONSUMER_SRC
     ${ALL_SOURCES}
 )
 
+set(PROD_EVAL_SRC
+    src/eval/producer_eval.cpp
+    ${ALL_SOURCES}
+)
 
+set(CON_EVAL_SRC
+    src/eval/consumer_eval.cpp
+    ${ALL_SOURCES}
+)
 
 # executables
 add_executable(producer ${PRODUCER_INT_SRC})
 add_executable(controller ${CONTROLLER_SRC})
 add_executable(broker ${BROKER_SRC})
 add_executable(consumer ${CONSUMER_SRC})
+add_executable(producer_eval ${PROD_EVAL_SRC})
+add_executable(consumer_eval ${CON_EVAL_SRC})
 
 
