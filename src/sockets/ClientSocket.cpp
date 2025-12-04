@@ -14,7 +14,7 @@ int ClientSocket::Init(std::string ip, int port) {
 	struct sockaddr_in addr;
 	fd_ = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd_ < 0) {
-		perror("ERROR: failed to create a socket");
+		// perror("ERROR: failed to create a socket");
 		return 0;
 	}
 
@@ -24,7 +24,7 @@ int ClientSocket::Init(std::string ip, int port) {
 	addr.sin_port = htons(port);
 
 	if ((connect(fd_, (struct sockaddr*)&addr, sizeof(addr))) < 0) {
-		perror("ERROR: failed to connect");
+		// perror("ERROR: failed to connect");
 		fd_ = -1;
 		return 0;
 	}

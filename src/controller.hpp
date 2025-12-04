@@ -39,28 +39,7 @@
 // Other brokers must initially register itself to the controller and periodically fetch metadata topic.
 // Hence, controller acts purely as a server. 
 
-// Controller will have 
-// - accepted thread: a single listening socket that accepts connection from brokers and spawn dedicated thread per broker.
-// - The dedicated broker thread handles brokerRegrequest, fetchrequest,ISRchangerequest.
-//   It also manages its liveness by checking freq of requests.
-// - Config thread: 
-// Normally controller should have a RESTFul HTTP server that handles dynamic topic addition/deletion. 
-// Instead of that, I will just use a local config file to specify topic-partition static assignment. 
-// Ideally, i will have this periodically monitor this file and add/remove topic records to metadata log.
-// For simplicity, only do this once at the beginnning once all connected.  i.e., no dynamic topic addition/deletion yet.
-// - Debug thread: Periodically prints current cluster metadata.
-
-
-// Final implementat:
-    // std::vector<std::thread> broker_handler_threads_;
-    // std::thread cfg_thread_;
-    // std::thread debug_thread_;
-    // std::thread watchdog_thread_;
-
-// Simplification:
-// - don't handle ISRChange requests.
 using json = nlohmann::json;
-
 
 class Controller {
 private:
@@ -166,11 +145,7 @@ private:
                     rr_idx = (rr_idx + 1) % num_brokers;
                 }
             }
-
-
-
         }
-
 
 
         // Add topic to in-memory metadata
@@ -298,13 +273,11 @@ private:
                 // Handle broker fetch requests for metadata
                 std::unique_ptr<Request> req = stub.receiveRequest();
                 if (req == nullptr) {
-                    // std::cerr << "Connection broke" << std::endl;
                     break;
                 }
 
                 // Update its liveliness.
                 last_req_time = std::chrono::system_clock::now();
-                // DEBUG
                 {
                     std::unique_lock<std::mutex> lk(mtx_);
                     brokers_last_req_time[broker_idx] = last_req_time;

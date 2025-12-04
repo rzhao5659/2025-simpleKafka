@@ -335,8 +335,6 @@ void KafkaConsumer::recordsFetchThread() {
                         std::string broker_ip = metadata_.broker_conn_info[fetch_broker_id].first;
                         int broker_port = metadata_.broker_conn_info[fetch_broker_id].second;
                         if (!fetch_broker_stub->connect(broker_ip, broker_port)) {
-                            // // DEBUG
-                            // std::cout << "failed to connect lol " << std::endl;
                             fetch_reqs_failed[i] = true;
                             continue;
                         }
@@ -345,8 +343,6 @@ void KafkaConsumer::recordsFetchThread() {
                     // Send request
                     bool success = fetch_broker_stub->sendAsyncFetchRequest(req);
                     if (!success) {
-                        // // DEBUG
-                        // std::cout << "failed to send lol " << std::endl;
                         fetch_reqs_failed[i] = true;
                         continue;
                     }
@@ -384,16 +380,12 @@ void KafkaConsumer::recordsFetchThread() {
                 }
 
                 if (!resp_opt.hasValue()) {
-                    // // DEBUG
-                    // std::cout << "no value in resp? " << std::endl;
                     fetch_reqs_failed[i] = true;
                     continue;
                 }
 
                 FetchResponse resp = resp_opt.getValue();
                 if (resp.getStatus() != StatusCode::SUCCESS) {
-                    // // DEBUG
-                    // std::cout << "not success: " << resp.getStatus() << std::endl;
                     fetch_reqs_failed[i] = true;
                     continue;
                 }
@@ -440,8 +432,6 @@ void KafkaConsumer::recordsFetchThread() {
 
                     // Choose other replica (broker) if allowed 
                     if (tp.fetch_from_leader_only) {
-                        // DEBUG
-                        // std::cerr << "Leader of topic-partition(" << tp.topic << "," << tp.partition << ")" << " have failed. Skipping..." << std::endl;
                         continue;
                     } else {
                         // Choose another healthy broker (randomly) that holds a replica of the failed tp.
@@ -467,8 +457,6 @@ void KafkaConsumer::recordsFetchThread() {
     catch (const std::exception& e) {
         std::cerr << "consumer recordfetchthread crashed: " << e.what() << std::endl;
     }
-
-
 }
 
 

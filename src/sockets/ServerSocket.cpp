@@ -32,7 +32,7 @@ bool ServerSocket::Init(int port) {
 	addr.sin_port = htons(port);
 
 	if ((bind(fd_, (struct sockaddr*)&addr, sizeof(addr))) < 0) {
-		perror("ERROR: failed to bind");
+		// perror("ERROR: failed to bind");
 		fd_ = -1;
 		return false;
 	}
@@ -47,7 +47,7 @@ std::unique_ptr<ServerSocket> ServerSocket::Accept() {
 	unsigned int addr_size = sizeof(addr);
 	accepted_fd = accept(fd_, (struct sockaddr*)&addr, &addr_size);
 	if (accepted_fd < 0) {
-		perror("ERROR: failed to accept connection");
+		// perror("ERROR: failed to accept connection");
 		return nullptr;
 	}
 

@@ -84,9 +84,7 @@ Broker::Broker(int my_id, std::string my_ip, uint16_t my_port,
     port_(my_port),
     tp_log_dir(log_folder_path),
     controller_fetcher(my_id, 10, 4096)   // id, fetch_trigger_size, fetch_max_bytes
-
 {
-
     // Initialize cluster metadata:
     // - Add controller connection info
     metadata_.broker_conn_info[controller_id] = std::make_pair(controller_ip, controller_port);
@@ -123,7 +121,6 @@ Broker::Broker(int my_id, std::string my_ip, uint16_t my_port,
 
 void Broker::onPartitionAssignment(PartitionAssignmentRecord& rec) {
     std::string tp_name = getTopicPartitionName(rec.topic, rec.partition);
-    int cnt;
     // Update in-memory cluster metadata:
     {
         std::unique_lock<std::mutex> lk(mtx_);
@@ -169,12 +166,10 @@ void Broker::onPartitionAssignment(PartitionAssignmentRecord& rec) {
     // Case 1. Broker is initialized as leader or promoted from follower to leader (F -> L)
     Role old_role = tp->role;
     if (is_leader && (old_role == Role::NONE || old_role == Role::FOLLOWER)) {
-
         std::unique_lock<std::mutex> lk(mtx_);
         // Stop consuming from leader partition.
         tp->consumer.reset();
         tp->role = Role::LEADER;
-
 
         // TODO: truncate log, written offset, index all to commited.
 
@@ -182,7 +177,6 @@ void Broker::onPartitionAssignment(PartitionAssignmentRecord& rec) {
         // Case 2. Broker is initialized as follower or remains follower but the tp has a new leader.
         std::unique_lock<std::mutex> lk(mtx_);
         tp->role = Role::FOLLOWER;
-        std::cout << "meow " << cnt++ << std::endl;
 
         if (!tp->consumer) {
             // Initialize consumer to fetch from leader.
@@ -263,28 +257,17 @@ void Broker::clientHandlerThread(std::unique_ptr<ServerSocket> socket) {
         // Handle either Produce, Fetch, or ClusterMetadata requests.
         std::unique_ptr<Request> req = stub.receiveRequest();
         if (req == nullptr) {
-            // debugstream << "Client disconnected" << std::endl;
             break;
         }
 
         RequestType req_type = req->getType();
 
-        // // DEBUG
-        // std::cout << "broker received request type of " << static_cast<int>(req_type) << std::endl;
         try {
             switch (req_type) {
             case RequestType::FETCH: {
                 auto* fetch_req = static_cast<FetchRequest*>(req.get());
                 int fetcher_id = fetch_req->getRequesterId();
                 std::string tp_name = getTopicPartitionName(fetch_req->topic, fetch_req->partition);
-
-                // DEBUG
-                // std::cerr << "=== FETCH REQUEST ===" << std::endl;
-                // std::cerr << "Broker ID: " << id_ << std::endl;
-                // std::cerr << "Fetcher ID: " << fetcher_id << std::endl;
-                // std::cerr << "Topic: " << fetch_req->topic << std::endl;
-                // std::cerr << "Partition: " << fetch_req->partition << std::endl;
-                // std::cerr << "Fetch offset: " << fetch_req->fetch_offset << std::endl;
 
                 FetchResponse resp;
                 resp.setResponderId(id_);
@@ -296,19 +279,13 @@ void Broker::clientHandlerThread(std::unique_ptr<ServerSocket> socket) {
                     bool tp_exists = metadata_.containsTopicPartition(fetch_req->topic, fetch_req->partition);
 
                     if (!tp_exists) {
-                        // DEBUG
-                        // std::cerr << "ERROR: Sending UNKNOWN_TOPIC_PARTITION for " << fetch_req->topic << fetch_req->partition << std::endl;
                         resp.setStatus(StatusCode::UNKNOWN_TOPIC_PARTITION);
                     } else {
                         // Check if this broker is assigned to this tp.
                         bool assigned = assigned_tps.find(tp_name) != assigned_tps.end();
                         if (!assigned) {
-                            // DEBUG
-                            // std::cerr << "ERROR: Sending REPLICA_NOT_ASSIGNED" << std::endl;
                             resp.setStatus(StatusCode::REPLICA_NOT_ASSIGNED);
                         } else {
-                            // DEBUG
-                            // std::cerr << "SUCCESS: Broker holds replica, processing fetch" << std::endl;
 
                             std::unique_ptr<AssignedTopicPartition>& tp = assigned_tps[tp_name];
                             Log& tp_log = tp->log;
@@ -318,9 +295,6 @@ void Broker::clientHandlerThread(std::unique_ptr<ServerSocket> socket) {
                             bool is_fetcher_follower = metadata_.isBrokerAFollower(fetcher_id, fetch_req->topic, fetch_req->partition);
                             if (tp->role == Role::LEADER && is_fetcher_follower) {
                                 // Broker (leader) is being fetched by a broker follower. 
-
-                                // DEBUG
-                                // std::cout << "im getting fetched by follower" << std::endl;
 
                                 // Update this follower last fetch offset
                                 tp->follower_fetch_offsets[fetcher_id] = fetch_req->fetch_offset;
@@ -416,8 +390,6 @@ void Broker::clientHandlerThread(std::unique_ptr<ServerSocket> socket) {
         }
 
     }
-
-    debugstream << "clientHandlerThread died" << std::endl;
 }
 
 
