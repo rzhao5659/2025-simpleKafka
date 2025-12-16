@@ -74,6 +74,12 @@ bool KafkaProducer::send_batch(const std::string& topic, const std::string& key,
         debugstream << "Broker " << broker_leader_id << " is not leader for topic " << topic << " partition " << partition_id << std::endl;
         is_metadata_stale_ = true;
         return false;
+    } else if (resp.getStatus() == StatusCode::NO_FOLLOWERS) {
+        debugstream
+            << "Write rejected for topic-partition (" << topic << "," << partition_id
+            << "): no replicas available (all have failed). "
+            << std::endl;
+        return false;
     }
 
     return true;

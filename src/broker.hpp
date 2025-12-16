@@ -1,10 +1,5 @@
 
 
-
-// Broker:
-// - 
-
-
 // For simplicity, creates dedicated thread per client (consumer/producer)
 // Each thread just wait and respond back.  Identify by type fetch, cluster, or produce. 
 // Keeps a dedicated connection to controller. 
@@ -35,24 +30,18 @@
 #ifndef BROKER_HPP
 #define BROKER_HPP
 
-#include "consumer.hpp"
 #include <vector>
 #include <thread>
 #include <string>
-#include <ifaddrs.h>       
-#include <sys/types.h>      
-#include <sys/socket.h>    
-#include <arpa/inet.h>     
-#include <netinet/in.h>    
-#include <cstdio>           
+#include <algorithm>
+#include <shared_mutex>
+#include "consumer.hpp"
 #include "cluster_metadata.hpp"
 #include "ServerStub.hpp"
 #include "records.hpp"
 #include "network_messages.hpp"
 #include "option.hpp"
-#include <mutex>
 #include "assert.h"
-#include <algorithm>
 
 class AssignedTopicPartition {
 public:
@@ -68,7 +57,7 @@ public:
     Log log;
 
     // Used if follower
-    std::shared_ptr<KafkaConsumer> consumer;  // fetch from leader broker
+    std::shared_ptr<KafkaConsumer> leader_consumer;  // fetch from leader broker
     int broker_leader_id;
 
     // Used if leader
@@ -86,23 +75,21 @@ private:
     int id_;
     std::string ip_;
     uint16_t port_;
+    std::string tp_log_dir;
 
-    ClusterMetaData metadata_;
-    std::mutex mtx_;
     ServerSocket acceptor_socket_;
-
-    // Acting as consumer: 
-    // - The design have multiple consumers, instead of one single subscribed to multiple tp, because having them separated them allows easier dynamic 
-    //  removal and addition of consumers, since topic removal is not yet supported.
-    KafkaConsumer controller_fetcher;   // Fetches ClusterMetadata changes from controller.
 
     std::thread metadata_poll_thread_;
     std::thread debug_thread_;
     std::thread replication_poll_thread_;
+    std::vector<std::thread> client_handler_threads_;
+    std::atomic<bool> shutdown_signal_{ false };
 
-    // Server-related variables.
-    std::string tp_log_dir;
+    KafkaConsumer controller_consumer;   // Fetches ClusterMetadata changes from controller.
+
+    ClusterMetaData metadata_;
     std::map<std::string, std::unique_ptr<AssignedTopicPartition>> assigned_tps;  // Maps topic-partition ("<topic>_<partition>" string) to its structure containing log and replication state.
+    std::shared_mutex metadata_tps_mtx_; // read write lock for both metadata_ and assigned_tps since they need to be synchronized. 
 
     std::string getTopicPartitionName(const std::string& topic, int partition) {
         return topic + "_" + std::to_string(partition);
@@ -110,7 +97,6 @@ private:
 
     void onPartitionAssignment(PartitionAssignmentRecord& rec);
 
-    std::atomic<bool> shutdown_signal_{ false };
 
 public:
     using Role = AssignedTopicPartition::Role;
@@ -121,22 +107,37 @@ public:
 
     ~Broker() {
         shutdown_signal_ = true;
-        if (metadata_poll_thread_.joinable()) {
-            metadata_poll_thread_.join();
-        }
-        if (replication_poll_thread_.joinable()) {
-            replication_poll_thread_.join();
-        }
         if (debug_thread_.joinable()) {
             debug_thread_.join();
         }
+
+        if (replication_poll_thread_.joinable()) {
+            replication_poll_thread_.join();
+        }
+        if (metadata_poll_thread_.joinable()) {
+            metadata_poll_thread_.join();
+        }
+
+        for (auto& thread : client_handler_threads_) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+
+
     }
+
     void pollMetadataThread();
     void clientHandlerThread(std::unique_ptr<ServerSocket> socket);
-    void listenForClientConnections();
     void replicationThread();
     void debugThread();
 
+    /**
+     * @brief Listens indefinitely for client connection and spawns dedicated
+     * thread for each.
+     *
+     */
+    void listenForClientConnections();
 
     void shutdown() {
         shutdown_signal_ = true;

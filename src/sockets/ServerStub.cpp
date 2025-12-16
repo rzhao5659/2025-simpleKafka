@@ -17,13 +17,18 @@ std::unique_ptr<Request> ServerStub::receiveRequest() {
 	}
 	int req_len = ntohl(net_req_len);
 
+	// Grow buffer if needed
+	if (buffer_.size() < req_len) {
+		buffer_.resize(req_len);
+	}
+
 	// Receive request
-	if (!socket->Recv(buffer, req_len, 0)) {
+	if (!socket->Recv(buffer_.data(), req_len, 0)) {
 		return nullptr;
 	}
 
 	// Extract type from the buffer (at offset 4, after requester_id)
-	RequestType type = static_cast<RequestType>(buffer[4]);
+	RequestType type = static_cast<RequestType>(buffer_[4]);
 	std::unique_ptr<Request> request;
 
 	switch (type) {
@@ -43,7 +48,7 @@ std::unique_ptr<Request> ServerStub::receiveRequest() {
 		return nullptr;
 	}
 
-	request->unmarshal(buffer);
+	request->unmarshal(buffer_.data());
 	return request;
 }
 
@@ -56,9 +61,14 @@ bool ServerStub::sendResponse(const Response& resp) {
 		return false;
 	}
 
+	// Grow buffer if needed
+	if (buffer_.size() < resp_len) {
+		buffer_.resize(resp_len);
+	}
+
 	// Send response
-	resp.marshal(buffer);
-	if (!socket->Send(buffer, resp_len)) {
+	resp.marshal(buffer_.data());
+	if (!socket->Send(buffer_.data(), resp_len)) {
 		return false;
 	}
 	return true;
@@ -81,30 +91,36 @@ bool ServerStub::sendFetchResponse(Log& tp_log, int fetch_offset, int fetch_max_
 	int commit_offset = tp_log.getCommitOffset();
 
 	// Send length first
-	int resp_len = sizeof(responder_id) + sizeof(status) + sizeof(commit_offset) + sizeof(num_rbs_read) + read_size;
+	int resp_len_without_data = sizeof(responder_id) + sizeof(status) + sizeof(commit_offset) + sizeof(num_rbs_read);
+	int resp_len = resp_len_without_data + read_size;
 	int net_resp_len = htonl(resp_len);
 	if (!socket->Send((char*)&net_resp_len, sizeof(net_resp_len))) {
 		return false;
 	}
 
+	// Grow buffer if needed
+	if (buffer_.size() < resp_len_without_data) {
+		buffer_.resize(resp_len_without_data);
+	}
+
 	// Marshal all fields in fetch response except list of record batches
 	int net_responder = htonl(responder_id);
-	memcpy(buffer, &net_responder, sizeof(net_responder));
+	memcpy(buffer_.data(), &net_responder, sizeof(net_responder));
 	int buf_size = sizeof(net_responder);
 
-	buffer[buf_size] = status;
-	buf_size += sizeof(uint8_t);
+	buffer_[buf_size] = status;
+	buf_size += sizeof(status);
 
 	int net_commit_offset = htonl(commit_offset);
-	memcpy(buffer + buf_size, &net_commit_offset, sizeof(net_commit_offset));
+	memcpy(buffer_.data() + buf_size, &net_commit_offset, sizeof(net_commit_offset));
 	buf_size += sizeof(net_commit_offset);
 
 	int net_num_rbs = htonl(num_rbs_read);
-	memcpy(buffer + buf_size, &net_num_rbs, sizeof(net_num_rbs));
+	memcpy(buffer_.data() + buf_size, &net_num_rbs, sizeof(net_num_rbs));
 	buf_size += sizeof(net_num_rbs);
 
 	// Send all fields in fetch response except list of record batches
-	if (!socket->Send(buffer, buf_size)) {
+	if (!socket->Send(buffer_.data(), buf_size)) {
 		return false;
 	}
 

@@ -15,7 +15,7 @@
 
 void KafkaConsumer::setClusterMetadata(ClusterMetaData& metadata) {
     // Update in-memory cluster metadata 
-    std::unique_lock<std::mutex> lk(mtx_);
+    std::unique_lock<std::mutex> lk(metadata_mtx_);
     metadata_ = metadata;
 
     // Initialize stubs for all brokers in the cluster metadata
@@ -53,7 +53,8 @@ void KafkaConsumer::fetchClusterMetadata(const std::string& broker_ip, int broke
 
 
 int KafkaConsumer::chooseFetchBroker(const std::string& topic_name, int partition) {
-    // Assumes locked mutex already.
+    std::unique_lock<std::mutex> lk(metadata_mtx_);
+
     // Find the list of brokers that holds replicas for this topic-partition
     Partition& p = metadata_.topics[topic_name].partitions[partition];
     std::vector<int> replicas = p.broker_followers_id;
@@ -70,19 +71,24 @@ int KafkaConsumer::chooseFetchBroker(const std::string& topic_name, int partitio
 }
 
 
-// TODO: This is pretty badly written, but as long as you setMetadata with controller as one of the broker. this works.
 bool KafkaConsumer::_sendBrokerRegistration(std::string ip, uint16_t port, int controller_id) {
     // Initialize connection if necessary.
     if (broker_sockets_.find(controller_id) == broker_sockets_.end()) {
         std::unique_ptr<ClientStub> stub(new ClientStub(id_));
         broker_sockets_[controller_id] = std::move(stub);
     }
-    std::unique_ptr<ClientStub>& controller_stub = broker_sockets_[controller_id];
+    ClientStub* controller_stub = broker_sockets_[controller_id].get();
 
     if (!controller_stub->isConnected()) {
-        std::string controller_ip = metadata_.broker_conn_info[controller_id].first;
-        int controller_port = metadata_.broker_conn_info[controller_id].second;
-        if (!controller_stub->connect(controller_ip, controller_port)) {
+        std::unique_lock<std::mutex> lk(metadata_mtx_);
+        if (metadata_.broker_conn_info.find(controller_id) != metadata_.broker_conn_info.end()) {
+            std::string controller_ip = metadata_.broker_conn_info[controller_id].first;
+            int controller_port = metadata_.broker_conn_info[controller_id].second;
+            if (!controller_stub->connect(controller_ip, controller_port)) {
+                return false;
+            }
+        } else {
+            // No controller connection info on metadata_
             return false;
         }
     }
@@ -96,10 +102,9 @@ bool KafkaConsumer::_sendBrokerRegistration(std::string ip, uint16_t port, int c
 }
 
 
-
-// Subscribe to all partitions of a topic
 bool KafkaConsumer::subscribe(const std::string& topic_name, bool read_from_start, bool leader_only) {
-    std::unique_lock<std::mutex> lk(mtx_);
+    // Assumptions:
+    // - Consumer is still single-threaded, as subscriptions are called before poll, which initiates the fetchThread. Hence, mutex is not necessary.
 
     // Check if the topic exists from cluster metadata.
     auto it = metadata_.topics.find(topic_name);
@@ -112,8 +117,8 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, bool read_from_star
     Topic& topic = metadata_.topics[topic_name];
 
     // Create TopicPartition for each partition
-    std::cout << "Subscribed to topic " << topic.id << " with " << topic.getNumPartitions() << " partitions" << std::endl;
-
+    std::cout << "Subscribing to topic " << topic.id << " with " << topic.getNumPartitions() << " partitions..." << std::endl;
+    int num_failed_sub = 0;
     for (int i = 0; i < topic.getNumPartitions(); i++) {
         Partition p = topic.partitions[i];
 
@@ -133,7 +138,8 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, bool read_from_star
             // Choose a random healthy replica (broker) to fetch from for load balancing.
             fetch_broker_id = chooseFetchBroker(tp.topic, tp.partition);
             if (fetch_broker_id == -1) {
-                std::cerr << "All brokers holding replicas of topic-partition(" << topic.id << "," << p.id << ")" << " have failed. Skipping..." << std::endl;
+                std::cerr << "Failed to subscribe topic-partition(" << topic.id << "," << p.id << "): " << "All brokers holding replicas of this have failed. Skipping this partition..." << std::endl;
+                num_failed_sub++;
                 continue;
             }
         }
@@ -149,14 +155,18 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, bool read_from_star
         }
     }
 
-
-
+    if (num_failed_sub == topic.getNumPartitions()) {
+        return false;
+    }
     return true;
 }
 
 
 bool KafkaConsumer::subscribe(const std::string& topic_name, int partition, bool read_from_start, bool leader_only) {
-    std::unique_lock<std::mutex> lk(mtx_);
+    // Assumptions:
+    // - Consumer is still single-threaded, as subscriptions are called before poll, which initiates the fetchThread. Hence, mutex is not necessary.
+    // - Topic-partition assignment is performed only after all brokers are connected, and these broker connection info stays constant even if some brokers failed.
+    //   Hence, all tp fetch broker id must refer to one of the broker in broker_conn_info from metadata.
 
     // Check if the topic exists from cluster metadata.
     auto it = metadata_.topics.find(topic_name);
@@ -164,7 +174,6 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, int partition, bool
         std::cerr << "Topic " << topic_name << " doesn't exist." << std::endl;
         return false;
     }
-
 
     // Get its info from cluster metadata: num_partitions and location (broker) of each replica.
     Topic& topic = metadata_.topics[topic_name];
@@ -190,7 +199,7 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, int partition, bool
     tp.fetch_broker_id = fetch_broker_id;
 
     if (fetch_broker_id == -1) {
-        std::cerr << "All brokers holding replicas of topic-partition(" << topic.id << "," << p.id << ")" << " have failed. Skipping..." << std::endl;
+        std::cerr << "Failed to subscribe topic-partition(" << topic.id << "," << p.id << "): " << "All brokers holding replicas of this have failed. Skipping this partition..." << std::endl;
         return false;
     }
 
@@ -207,7 +216,6 @@ bool KafkaConsumer::subscribe(const std::string& topic_name, int partition, bool
 }
 
 
-
 void KafkaConsumer::removeFailedBrokers(std::vector<int>& brokers_id) {
     // Remove brokers ids that appear in failed brokers.
     brokers_id.erase(
@@ -219,32 +227,22 @@ void KafkaConsumer::removeFailedBrokers(std::vector<int>& brokers_id) {
     );
 }
 
-// Pull one record batch from each tp's local buffer of fetched records in round-robin fashion.
-// If not enough record batches, it will block until the background fetch thread retrieves enough.
-// Change: this no longer blocks. it will return empty record batch if necessary
 std::vector<ConsumerRecordBatch> KafkaConsumer::poll(int num_rbs, int timeout_ms) {
     std::vector<ConsumerRecordBatch> result;
 
     // Start fetch thread
-    if (!shutdown_signal_ && !fetch_thread_.joinable()) {
+    if (!fetch_thread_.joinable()) {
         std::thread fetch_thread(&KafkaConsumer::recordsFetchThread, this);
         fetch_thread_ = std::move(fetch_thread);
     }
 
-    int num_tps = 0;
-    {
-        std::unique_lock<std::mutex> lk(mtx_);
-        num_tps = subscribed_tps.size();
-    }
-
+    int num_tps = subscribed_tps.size();
     if (num_tps == 0) {
         return result;
     }
-
     result.reserve(num_rbs);
 
     auto start_time = std::chrono::steady_clock::now();
-
     int fetched = 0;
     while (fetched < num_rbs) {
         // Check if timeout expired
@@ -257,7 +255,8 @@ std::vector<ConsumerRecordBatch> KafkaConsumer::poll(int num_rbs, int timeout_ms
         TopicPartition& tp = subscribed_tps[poll_tp_idx_];
         ConsumerRecordBatch popped_rb;
 
-        bool success = tp.fetched_rbs_queue->try_pop(0, popped_rb);
+        int timeout_per_rb_ms = std::min(timeout_ms, 100);
+        bool success = tp.fetched_rbs_queue->try_pop(timeout_per_rb_ms, popped_rb);
         if (success) {
             result.push_back(popped_rb);
             fetched++;
@@ -270,193 +269,170 @@ std::vector<ConsumerRecordBatch> KafkaConsumer::poll(int num_rbs, int timeout_ms
 
 // Background thread that fetches records from brokers
 void KafkaConsumer::recordsFetchThread() {
+    while (!shutdown_signal_) {
+        // Get a list of topic-partitions that needs fetching (small queue size)
+        std::vector<int> fetch_tp_idxs;
+        int num_subscribed_tps = subscribed_tps.size();
+        for (int i = 0; i < subscribed_tps.size(); i++) {
+            if (subscribed_tps[i].needFetch()) {
+                fetch_tp_idxs.push_back(i);
+            }
+        }
 
-    try {
-        while (!shutdown_signal_) {
-            // Get a list of topic-partitions that needs fetching
-            std::vector<int> fetch_tp_idxs;
-            {
-                std::unique_lock<std::mutex> lk(mtx_);
-                for (int i = 0; i < subscribed_tps.size(); i++) {
-                    if (subscribed_tps[i].needFetch()) {
-                        fetch_tp_idxs.push_back(i);
-                    }
+        // Sleep if no fetching needed.
+        if (fetch_tp_idxs.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        // Create FetchRequest
+        std::vector<FetchRequest> fetch_reqs;
+        fetch_reqs.reserve(fetch_tp_idxs.size());
+        for (int i = 0; i < fetch_tp_idxs.size(); i++) {
+            int idx = fetch_tp_idxs[i];
+            TopicPartition& tp = subscribed_tps[idx];
+
+            FetchRequest fetch_req;
+            fetch_req.setRequesterId(id_);
+            fetch_req.topic = tp.topic;
+            fetch_req.partition = tp.partition;
+            fetch_req.fetch_offset = tp.fetch_offset;
+            fetch_req.fetch_max_bytes = tp.fetch_max_bytes;
+
+            fetch_reqs.push_back(fetch_req);
+        }
+
+        // Send FetchRequest
+        // Mark any failed request.
+        std::vector<bool> fetch_reqs_failed(fetch_reqs.size(), false);
+        for (int i = 0; i < fetch_reqs.size(); i++) {
+            int idx = fetch_tp_idxs[i];
+            FetchRequest& req = fetch_reqs[i];
+
+            TopicPartition& tp = subscribed_tps[idx];
+
+            // Find the corresponding broker
+            int fetch_broker_id = tp.fetch_broker_id;
+            if (fetch_broker_id == -1) {
+                fetch_reqs_failed[i] = true;
+                continue;
+            }
+            assert(broker_sockets_.find(fetch_broker_id) != broker_sockets_.end());
+            ClientStub* fetch_broker_stub = broker_sockets_[fetch_broker_id].get();
+
+            // Initialize connection if necessary.
+            if (!fetch_broker_stub->isConnected()) {
+                std::string broker_ip;
+                int broker_port;
+                {
+                    std::unique_lock<std::mutex> lk(metadata_mtx_);
+                    broker_ip = metadata_.broker_conn_info[fetch_broker_id].first;
+                    broker_port = metadata_.broker_conn_info[fetch_broker_id].second;
+                }
+
+                if (!fetch_broker_stub->connect(broker_ip, broker_port)) {
+                    fetch_reqs_failed[i] = true;
+                    continue;
                 }
             }
 
-            // Sleep if no fetching needed.
-            if (fetch_tp_idxs.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Send request
+            bool success = fetch_broker_stub->sendAsyncFetchRequest(req);
+            if (!success) {
+                fetch_reqs_failed[i] = true;
+                continue;
+            }
+        }
+
+        // Receive response
+        // Mark any failed response.
+        for (int i = 0; i < fetch_reqs.size(); i++) {
+            if (fetch_reqs_failed[i]) {
                 continue;
             }
 
-            // Create FetchRequest
-            std::vector<FetchRequest> fetch_reqs;
-            fetch_reqs.reserve(fetch_tp_idxs.size());
-            for (int i = 0; i < fetch_tp_idxs.size(); i++) {
-                int idx = fetch_tp_idxs[i];
-                {
-                    std::unique_lock<std::mutex> lk(mtx_);
-                    TopicPartition& tp = subscribed_tps[idx];
+            int idx = fetch_tp_idxs[i];
+            std::string topic_name = subscribed_tps[idx].topic;
+            int partition = subscribed_tps[idx].partition;
+            TopicPartition& tp = subscribed_tps[idx];
+            Option<FetchResponse> resp_opt;
 
-                    FetchRequest fetch_req;
-                    fetch_req.setRequesterId(id_);
-                    fetch_req.topic = tp.topic;
-                    fetch_req.partition = tp.partition;
-                    fetch_req.fetch_offset = tp.fetch_offset;
-                    fetch_req.fetch_max_bytes = tp.fetch_max_bytes;
+            // Find the corresponding broker
+            int fetch_broker_id = tp.fetch_broker_id;
+            assert(broker_sockets_.find(fetch_broker_id) != broker_sockets_.end());
+            ClientStub* fetch_broker_stub = broker_sockets_[fetch_broker_id].get();
 
-                    fetch_reqs.push_back(fetch_req);
-                }
+            // Receive response synchronously
+            resp_opt = fetch_broker_stub->receiveAsyncFetchResponse();
 
+            if (!resp_opt.hasValue()) {
+                fetch_reqs_failed[i] = true;
+                continue;
             }
 
-            // Send FetchRequest
-            // Mark any failed request.
-            std::vector<bool> fetch_reqs_failed(fetch_reqs.size(), false);
-            for (int i = 0; i < fetch_reqs.size(); i++) {
-                int idx = fetch_tp_idxs[i];
-                FetchRequest& req = fetch_reqs[i];
-
-                {
-                    std::unique_lock<std::mutex> lk(mtx_);
-                    TopicPartition& tp = subscribed_tps[idx];
-
-                    // Find the corresponding broker
-                    int fetch_broker_id = tp.fetch_broker_id;
-                    if (broker_sockets_.find(fetch_broker_id) == broker_sockets_.end()) {
-                        std::unique_ptr<ClientStub> stub(new ClientStub(id_));
-                        broker_sockets_[fetch_broker_id] = std::move(stub);
-                    }
-                    std::unique_ptr<ClientStub>& fetch_broker_stub = broker_sockets_[fetch_broker_id];
-
-                    // Initialize connection if necessary.
-                    if (!fetch_broker_stub->isConnected()) {
-                        std::string broker_ip = metadata_.broker_conn_info[fetch_broker_id].first;
-                        int broker_port = metadata_.broker_conn_info[fetch_broker_id].second;
-                        if (!fetch_broker_stub->connect(broker_ip, broker_port)) {
-                            fetch_reqs_failed[i] = true;
-                            continue;
-                        }
-                    }
-
-                    // Send request
-                    bool success = fetch_broker_stub->sendAsyncFetchRequest(req);
-                    if (!success) {
-                        fetch_reqs_failed[i] = true;
-                        continue;
-                    }
-                }
-
+            FetchResponse resp = resp_opt.getValue();
+            if (resp.getStatus() != StatusCode::SUCCESS) {
+                fetch_reqs_failed[i] = true;
+                continue;
             }
 
+            // Push record batches to the queue buffer of this tp.
+            ConsumerRecordBatch consumer_rb;
+            consumer_rb.topic = topic_name;
+            consumer_rb.partition = partition;
+            consumer_rb.commit_offset = resp.commit_offset;
 
-            // Receive response
-            // Mark any failed response.
-            for (int i = 0; i < fetch_reqs.size(); i++) {
-                int idx = fetch_tp_idxs[i];
-                std::string topic_name = subscribed_tps[idx].topic;
-                int partition = subscribed_tps[idx].partition;
-
-                if (fetch_reqs_failed[i]) {
-                    continue;
-                }
-
-                Option<FetchResponse> resp_opt;
-                {
-                    std::unique_lock<std::mutex> lk(mtx_);
-                    TopicPartition& tp = subscribed_tps[idx];
-
-                    // Find the corresponding broker
-                    int fetch_broker_id = tp.fetch_broker_id;
-                    if (broker_sockets_.find(fetch_broker_id) == broker_sockets_.end()) {
-                        std::unique_ptr<ClientStub> stub(new ClientStub(id_));
-                        broker_sockets_[fetch_broker_id] = std::move(stub);
-                    }
-                    std::unique_ptr<ClientStub>& fetch_broker_stub = broker_sockets_[fetch_broker_id];
-
-                    // Receive response
-                    resp_opt = fetch_broker_stub->receiveAsyncFetchResponse();
-                }
-
-                if (!resp_opt.hasValue()) {
-                    fetch_reqs_failed[i] = true;
-                    continue;
-                }
-
-                FetchResponse resp = resp_opt.getValue();
-                if (resp.getStatus() != StatusCode::SUCCESS) {
-                    fetch_reqs_failed[i] = true;
-                    continue;
-                }
-
-                // Push record batches to the local polled buffer of this tp.
-                ConsumerRecordBatch consumer_rb;
-                consumer_rb.topic = topic_name;
-                consumer_rb.partition = partition;
-                consumer_rb.commit_offset = resp.commit_offset;
-
-                int num_rbs = resp.record_batches.size();
-                if (num_rbs == 0) {
-                    // If no record batches, still add a ConsumerRecordBatch to provide follower information about leader's fetch offset.
-                    {
-                        std::unique_lock<std::mutex> lk(mtx_);
-                        TopicPartition& tp = subscribed_tps[idx];
-                        tp.fetched_rbs_queue->push(consumer_rb);
-                    }
-                } else {
-                    for (int j = 0; j < num_rbs; j++) {
-                        RecordBatch& rb = resp.record_batches[j];
-                        consumer_rb.record_batch = rb;
-                        {
-                            std::unique_lock<std::mutex> lk(mtx_);
-                            TopicPartition& tp = subscribed_tps[idx];
-                            tp.fetched_rbs_queue->push(consumer_rb);
-                            tp.fetch_offset = rb.base_offset + rb.getNumRecords(); // update consumer fetch offset.
-                        }
-                    }
-                }
-
-            }
-
-            // Deal with fetch failure of tps: 
-            for (int i = 0; i < fetch_reqs_failed.size(); i++) {
-                if (fetch_reqs_failed[i]) {
-                    int idx = fetch_tp_idxs[i];
-                    int fetch_broker_id = -1;
-                    std::unique_lock<std::mutex> lk(mtx_);
-                    TopicPartition& tp = subscribed_tps[idx];
-
-                    // Mark brokers responsible for these failed tps retrival as failed, 
-                    failed_brokers_.insert(tp.fetch_broker_id);
-
-                    // Choose other replica (broker) if allowed 
-                    if (tp.fetch_from_leader_only) {
-                        continue;
-                    } else {
-                        // Choose another healthy broker (randomly) that holds a replica of the failed tp.
-                        fetch_broker_id = chooseFetchBroker(tp.topic, tp.partition);
-                        if (fetch_broker_id == -1) {
-                            std::cerr << "All brokers holding replicas of topic-partition(" << tp.topic << "," << tp.partition << ")" << " have failed. Skipping..." << std::endl;
-                            continue;
-                        }
-
-                        std::cout << "Broker " << tp.fetch_broker_id << " that is being fetched for topic-partition(" << tp.topic << "," << tp.partition << ")" << " have failed. " << std::endl;
-                        std::cout << "Fetching from other broker " << fetch_broker_id << " that holds replica for this topic-partition" << std::endl;
-                        tp.fetch_broker_id = fetch_broker_id;
-                    }
+            int num_rbs = resp.record_batches.size();
+            if (num_rbs == 0) {
+                // If no record batches, still add a ConsumerRecordBatch to provide follower information about leader's fetch offset.
+                tp.fetched_rbs_queue->push(consumer_rb);
+            } else {
+                for (int j = 0; j < num_rbs; j++) {
+                    RecordBatch& rb = resp.record_batches[j];
+                    consumer_rb.record_batch = rb;
+                    tp.fetched_rbs_queue->push(consumer_rb);
+                    tp.fetch_offset = rb.base_offset + rb.getNumRecords(); // update consumer fetch offset.
                 }
             }
-
-
-            // Sleep before going to next fetch iteration
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         }
+
+        // Deal with fetch failure of tps: 
+        for (int i = 0; i < fetch_reqs_failed.size(); i++) {
+            if (fetch_reqs_failed[i]) {
+                int idx = fetch_tp_idxs[i];
+                int fetch_broker_id = -1;
+                TopicPartition& tp = subscribed_tps[idx];
+
+                // Mark brokers responsible for these failed tps retrival as failed. 
+                failed_brokers_.insert(tp.fetch_broker_id);
+
+                // Choose other replica (broker) if allowed 
+                if (tp.fetch_from_leader_only) {
+                    std::cerr << "Failed to fetch from topic-partition(" << tp.topic << "," << tp.partition << "): Leader has failed and this tp is configured to fetch only from leader. Skipping..." << std::endl;
+                    continue;
+                } else {
+                    // Choose randomly another healthy broker that holds a replica of the failed tp.
+                    fetch_broker_id = chooseFetchBroker(tp.topic, tp.partition);
+                    if (fetch_broker_id == -1) {
+                        std::cerr << "Failed to fetch from topic-partition(" << tp.topic << "," << tp.partition << "): All brokers holding replicas have failed. Skipping..." << std::endl;
+                        continue;
+                    }
+
+                    std::cout << "Broker " << tp.fetch_broker_id << " that is being fetched for topic-partition(" << tp.topic << "," << tp.partition << ")" << " have failed. " << std::endl;
+                    std::cout << "\t -> Now fetching from broker " << fetch_broker_id << " for this tp." << std::endl;
+                    tp.fetch_broker_id = fetch_broker_id;
+                }
+            }
+        }
+
+
+        // Sleep before next fetch iteration
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    catch (const std::exception& e) {
-        std::cerr << "consumer recordfetchthread crashed: " << e.what() << std::endl;
-    }
+
+
+
 }
 
 

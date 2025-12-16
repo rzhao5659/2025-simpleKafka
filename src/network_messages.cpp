@@ -3,6 +3,7 @@
 #include <iostream>
 #include <arpa/inet.h>
 
+constexpr size_t TOPIC_SIZE = 32;
 
 // #### ProduceRequest ####
 void ProduceRequest::marshal(char* buffer) const {
@@ -16,8 +17,13 @@ void ProduceRequest::marshal(char* buffer) const {
     buffer[offset] = static_cast<uint8_t>(type_);
     offset++;
 
-    memcpy(buffer + offset, topic.c_str(), 32);
-    offset += 32;
+    size_t topic_len = topic.size();
+    memcpy(buffer + offset, topic.c_str(), topic_len);
+    // pad remaining bytes with zeros
+    if (topic_len < TOPIC_SIZE) {
+        memset(buffer + offset + topic_len, 0, TOPIC_SIZE - topic_len);
+    }
+    offset += TOPIC_SIZE;
 
     memcpy(buffer + offset, &net_partition, sizeof(net_partition));
     offset += sizeof(net_partition);
@@ -196,8 +202,13 @@ void FetchRequest::marshal(char* buffer) const {
     buffer[offset] = static_cast<uint8_t>(type_);
     offset++;
 
-    memcpy(buffer + offset, topic.c_str(), 32);
-    offset += 32;
+    size_t topic_len = topic.size();
+    memcpy(buffer + offset, topic.c_str(), topic_len);
+    // pad remaining bytes with zeros
+    if (topic_len < TOPIC_SIZE) {
+        memset(buffer + offset + topic_len, 0, TOPIC_SIZE - topic_len);
+    }
+    offset += TOPIC_SIZE;
 
     memcpy(buffer + offset, &net_partition, sizeof(net_partition));
     offset += sizeof(net_partition);

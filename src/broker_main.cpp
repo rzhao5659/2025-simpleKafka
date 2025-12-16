@@ -8,11 +8,6 @@
 
 std::atomic<bool> shutdown_requested(false);
 
-void signal_handler(int signal) {
-    std::cout << "\nReceived signal " << signal << ", shutting down gracefully..." << std::endl;
-    shutdown_requested = true;
-}
-
 void printUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " <broker_id> <broker_ip> <broker_port> "
         << "<controller_id> <controller_ip> <controller_port> <log_folder_path> <debug>"
@@ -48,10 +43,7 @@ bool createDirectoryIfNotExists(const std::string& path) {
 }
 
 int main(int argc, char* argv[]) {
-
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
+    signal(SIGPIPE, SIG_IGN);
 
     // Check arguments
     if (argc != 9) {
@@ -81,7 +73,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-
     std::cout << "========================================" << std::endl;
     std::cout << "Starting Kafka Broker" << std::endl;
     std::cout << "========================================" << std::endl;
@@ -94,7 +85,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Debug print: " << debug << std::endl;
     std::cout << "========================================\n" << std::endl;
 
-    // Create broker with new constructor signature
     Broker broker(
         broker_id,
         broker_ip,
@@ -106,17 +96,6 @@ int main(int argc, char* argv[]) {
         debug
     );
 
-    std::thread listen_thread([&broker]() {
-        broker.listenForClientConnections();
-        });
-
-    // Wait for shutdown signal
-    while (!shutdown_requested) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    std::cout << "Shutting down broker..." << std::endl;
-    broker.shutdown();  // Call shutdown method
-    listen_thread.detach();
+    broker.listenForClientConnections();
     return 0;
 }

@@ -79,14 +79,15 @@ public:
         memcpy(record_batch_buffer, &net_base_offset, sizeof(net_base_offset));
     }
 
-    void print(std::ostream& os = std::cout) const {
-        os << "RecordBatch[base=" << base_offset
-            << ", records=" << records.size() << "] { ";
-        for (size_t i = 0; i < records.size(); i++) {
-            os << records[i];
-            if (i < records.size() - 1) os << ", ";
+    friend std::ostream& operator<<(std::ostream& os, const RecordBatch& batch) {
+        os << "RecordBatch[base=" << batch.base_offset
+            << ", records=" << batch.records.size() << "] { ";
+        for (size_t i = 0; i < batch.records.size(); i++) {
+            os << batch.records[i];
+            if (i < batch.records.size() - 1) os << ", ";
         }
-        os << " }" << std::endl;
+        os << "}";
+        return os;
     }
 };
 

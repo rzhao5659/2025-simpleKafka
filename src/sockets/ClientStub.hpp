@@ -2,6 +2,7 @@
 #define __CLIENT_STUB_H__
 
 #include <string>
+#include <vector>
 
 #include "ClientSocket.hpp"
 #include "network_messages.hpp"
@@ -10,7 +11,7 @@
 class ClientStub {
 private:
 	ClientSocket socket_;
-	char buffer_[1024];
+	std::vector<char> buffer_;
 
 public:
 	int server_id;

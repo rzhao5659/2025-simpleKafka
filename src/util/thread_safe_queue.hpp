@@ -18,9 +18,9 @@ public:
         return q.empty();
     }
 
-    bool try_pop(int timeout_s, T& result) {
+    bool try_pop(int timeout_ms, T& result) {
         std::unique_lock<std::mutex> lk(mtx);
-        auto sleep_until_time = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
+        auto sleep_until_time = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         bool not_timedout = new_entry_cv.wait_until(lk, sleep_until_time, [this] {return !q.empty();});
         if (!not_timedout) {
             return false;

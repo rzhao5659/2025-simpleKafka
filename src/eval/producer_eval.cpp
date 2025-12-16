@@ -11,40 +11,42 @@
 
 std::atomic<int> total_sent(0);
 
+// Runs for 30s
 void producerThread(int producer_id, const std::string& broker_ip, int broker_port,
     const std::string& topic, int interval_ms) {
-    try {
-        KafkaProducer producer(producer_id, broker_ip, broker_port);
 
-        std::string key = "producer_" + std::to_string(producer_id);
-        int counter = 0;
+    KafkaProducer producer(producer_id, broker_ip, broker_port);
 
-        while (true) {
-            std::string value = std::to_string(counter++);
+    std::string key = "producer_" + std::to_string(producer_id);
+    int counter = 0;
 
-            if (producer.send(topic, key, value)) {
-                total_sent++;
+    std::vector<std::string> batch;
+    batch.reserve(10);
+
+    const auto start = std::chrono::steady_clock::now();
+    const auto duration = std::chrono::seconds(30);
+
+    while (std::chrono::steady_clock::now() - start < duration) {
+        batch.emplace_back(std::to_string(counter++));
+
+        // Every 10 records send it as batch
+        if (batch.size() == 10) {
+            if (producer.send_batch(topic, key, batch)) {
+                total_sent += batch.size();
             }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+            batch.clear();
         }
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(interval_ms)
+        );
     }
-    catch (const std::exception& e) {
-        std::cerr << "[Producer " << producer_id << "] Error: " << e.what() << std::endl;
-    }
-}
 
-void statsThread() {
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(10));
-
-        int count = total_sent.exchange(0);
-        double throughput = count / 10.0;
-
-        auto now = std::chrono::system_clock::now();
-        auto timestamp = std::chrono::system_clock::to_time_t(now);
-
-        std::cout << "[" << timestamp << "] Throughput: " << throughput << " msg/s" << std::endl;
+    // Flush remaining records (if any)
+    if (!batch.empty()) {
+        if (producer.send_batch(topic, key, batch)) {
+            total_sent += batch.size();
+        }
     }
 }
 
@@ -64,9 +66,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Spawning " << N << " producers, topic: " << topic
         << ", interval: " << P << " ms" << std::endl;
 
-    std::thread stats(statsThread);
-    stats.detach();
-
     std::vector<std::thread> producers;
     for (int i = 0; i < N; i++) {
         int producer_id = 100 + i;
@@ -76,6 +75,10 @@ int main(int argc, char* argv[]) {
     for (auto& t : producers) {
         t.join();
     }
+
+    // Print throughput
+    double throughput = total_sent / 30.0;
+    std::cout << "Producer Throughput: " << throughput << " msg/s" << std::endl;
 
     return 0;
 }

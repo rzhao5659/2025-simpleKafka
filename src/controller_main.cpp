@@ -1,6 +1,7 @@
 #include "controller.hpp"
 #include <iostream>
 #include <cstdlib>
+#include <signal.h>  
 
 void printUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " <controller_id> <controller_ip> <listen_port> <num_brokers> "
@@ -18,6 +19,8 @@ void printUsage(const char* program_name) {
 }
 
 int main(int argc, char* argv[]) {
+    signal(SIGPIPE, SIG_IGN);
+
     // Check arguments
     if (argc != 8) {
         std::cerr << "Error: Invalid number of arguments." << std::endl;

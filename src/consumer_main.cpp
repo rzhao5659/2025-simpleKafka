@@ -2,13 +2,7 @@
 #include <iostream>
 #include <string>
 #include <cstdlib>
-#include <csignal>
-#include <thread>
-#include <chrono>
-#include <atomic> 
-
-
-std::atomic<bool> shutdown_requested(false);
+#include <signal.h>  
 
 void printUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " <consumer_id> <broker_ip> <broker_port> <topic>" << std::endl;
@@ -21,15 +15,8 @@ void printUsage(const char* program_name) {
     std::cout << "  topic        - Topic to consume from (e.g., orders)" << std::endl;
 }
 
-void signal_handler(int signal) {
-    std::cout << "\nShutting down consumer gracefully..." << std::endl;
-    shutdown_requested = true;
-}
-
 int main(int argc, char* argv[]) {
-
-    signal(SIGINT, signal_handler);   // Ctrl+C
-    signal(SIGTERM, signal_handler);  // kill command
+    signal(SIGPIPE, SIG_IGN);
 
     // Check for help flag
     if (argc > 1 && (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")) {
@@ -58,39 +45,34 @@ int main(int argc, char* argv[]) {
     std::cout << "Topic: " << topic << std::endl;
     std::cout << "========================================\n" << std::endl;
 
-    // Create consumer
-    KafkaConsumer consumer(consumer_id, 5, 4096);  // fetch_trigger_size=5, fetch_max_bytes=4096
+    KafkaConsumer consumer(consumer_id, 10, 4096);  // fetch_trigger_size=5, fetch_max_bytes=4096
+
+    // Fetch metadata first to discover cluster and topics
     consumer.fetchClusterMetadata(broker_ip, broker_port);
+
+    // Subscribe to topics  
     bool success = consumer.subscribe(topic, true, false);  // read_from_start=true, leader_only=false
     if (!success) {
         std::cerr << "Failed to subscribe to topic" << std::endl;
         return 1;
     }
-    std::cout << "\nConsuming messages (Press Ctrl+C to stop)...\n" << std::endl;
 
-    // Poll for messages
-    try {
-        while (!shutdown_requested) {
-            std::vector<ConsumerRecordBatch> record_batches = consumer.poll(1);
-
-            for (const auto& consumer_rb : record_batches) {
-                const RecordBatch& rb = consumer_rb.record_batch;
-
-                if (rb.getNumRecords() != 0) {
-                    for (const auto& record : rb.records) {
-                        std::cout << "Offset " << (rb.base_offset + record.rel_offset) <<
-                            ": (" << record.key << "," << record.value << ")" << std::endl;
-                    }
+    // Process messages
+    std::cout << "\nConsuming messages, displayed in format: [topic-partition-id]: (key, value).  (Press Ctrl+C to stop)...\n" << std::endl;
+    while (true) {
+        std::vector<ConsumerRecordBatch> record_batches = consumer.poll(1);
+        for (const auto& consumer_rb : record_batches) {
+            const RecordBatch& rb = consumer_rb.record_batch;
+            if (rb.getNumRecords() != 0) {
+                for (const auto& record : rb.records) {
+                    std::cout << "[" << consumer_rb.topic << "-" << consumer_rb.partition << "-" << (rb.base_offset + record.rel_offset) << "]: "
+                        << record << std::endl;
                 }
-
             }
 
         }
     }
-    catch (const std::exception& e) {
-        std::cerr << "Consumer error: " << e.what() << std::endl;
-        return 1;
-    }
+
 
 
 

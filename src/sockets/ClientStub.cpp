@@ -22,19 +22,28 @@ Option<ClusterMetaDataResponse> ClientStub::sendClusterMetadataRequest() {
 		return resp;
 	}
 
+	// Grow buffer if needed
+	if (buffer_.size() < req_length) {
+		buffer_.resize(req_length);
+	}
+
 	// Send request itself
-	req.marshal(buffer_);
-	if (socket_.Send(buffer_, req_length)) {
+	req.marshal(buffer_.data());
+	if (socket_.Send(buffer_.data(), req_length)) {
 		// Receive response's length
 		int net_resp_length;
 		if (socket_.Recv((char*)&net_resp_length, sizeof(net_resp_length))) {
 			int resp_length = ntohl(net_resp_length);
 
-			if (socket_.Recv(buffer_, resp_length)) {
+			// Grow buffer if needed.
+			if (buffer_.size() < resp_length) {
+				buffer_.resize(resp_length);
+			}
+			if (socket_.Recv(buffer_.data(), resp_length)) {
 				ClusterMetaDataResponse response;
 
 				// Receive response itself
-				response.unmarshal(buffer_);
+				response.unmarshal(buffer_.data());
 				resp.setValue(response);
 			}
 		}
@@ -58,16 +67,25 @@ Option<BrokerRegistrationResponse> ClientStub::sendBrokerRegistrationRequest(int
 	}
 
 	// Send request itself
-	req.marshal(buffer_);
-	if (socket_.Send(buffer_, req_length)) {
+	// Grow buffer if needed.
+	if (buffer_.size() < req_length) {
+		buffer_.resize(req_length);
+	}
+	req.marshal(buffer_.data());
+	if (socket_.Send(buffer_.data(), req_length)) {
 		// Receive response's length
 		int net_resp_length;
 		if (socket_.Recv((char*)&net_resp_length, sizeof(net_resp_length))) {
 			int resp_length = ntohl(net_resp_length);
 
-			if (socket_.Recv(buffer_, resp_length)) {
+			// Grow buffer if needed.
+			if (buffer_.size() < resp_length) {
+				buffer_.resize(resp_length);
+			}
+
+			if (socket_.Recv(buffer_.data(), resp_length)) {
 				BrokerRegistrationResponse response;
-				response.unmarshal(buffer_);
+				response.unmarshal(buffer_.data());
 				resp.setValue(response);
 			}
 		}
@@ -95,16 +113,26 @@ Option<ProduceResponse> ClientStub::sendProduceRequest(const std::string& topic,
 	}
 
 	// Send request itself
-	req.marshal(buffer_);
-	if (socket_.Send(buffer_, req_length)) {
+	// Grow buffer if needed.
+	if (buffer_.size() < req_length) {
+		buffer_.resize(req_length);
+	}
+	req.marshal(buffer_.data());
+	if (socket_.Send(buffer_.data(), req_length)) {
 		// Receive response's length
 		int net_resp_length;
 		if (socket_.Recv((char*)&net_resp_length, sizeof(net_resp_length))) {
 			int resp_length = ntohl(net_resp_length);
+
+			// Grow buffer if needed.
+			if (buffer_.size() < resp_length) {
+				buffer_.resize(resp_length);
+			}
+
 			// Receive response itself
-			if (socket_.Recv(buffer_, resp_length)) {
+			if (socket_.Recv(buffer_.data(), resp_length)) {
 				ProduceResponse response;
-				response.unmarshal(buffer_);
+				response.unmarshal(buffer_.data());
 				resp.setValue(response);
 			}
 		}
@@ -121,9 +149,14 @@ bool ClientStub::sendAsyncFetchRequest(const FetchRequest& req) {
 		return false;
 	}
 
+	// Grow buffer if needed.
+	if (buffer_.size() < req_length) {
+		buffer_.resize(req_length);
+	}
+
 	// Send request 
-	req.marshal(buffer_);
-	if (!socket_.Send(buffer_, req_length)) {
+	req.marshal(buffer_.data());
+	if (!socket_.Send(buffer_.data(), req_length)) {
 		return false;
 	}
 	return true;
@@ -137,10 +170,16 @@ Option<FetchResponse> ClientStub::receiveAsyncFetchResponse() {
 	int net_resp_length;
 	if (socket_.Recv((char*)&net_resp_length, sizeof(net_resp_length))) {
 		int resp_length = ntohl(net_resp_length);
+
+		// Grow buffer if needed.
+		if (buffer_.size() < resp_length) {
+			buffer_.resize(resp_length);
+		}
+
 		// Receive response itself
-		if (socket_.Recv(buffer_, resp_length)) {
+		if (socket_.Recv(buffer_.data(), resp_length)) {
 			FetchResponse response;
-			response.unmarshal(buffer_);
+			response.unmarshal(buffer_.data());
 			resp.setValue(response);
 		}
 	}

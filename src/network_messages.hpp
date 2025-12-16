@@ -24,6 +24,7 @@ enum StatusCode : uint8_t {
     NOT_LEADER_ERROR = 2,
     UNKNOWN_TOPIC_PARTITION = 3,
     REPLICA_NOT_ASSIGNED = 4,
+    NO_FOLLOWERS = 5,
 };
 
 class NetworkMessage {

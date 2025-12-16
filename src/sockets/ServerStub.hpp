@@ -10,7 +10,7 @@
 class ServerStub {
 private:
 	std::unique_ptr<ServerSocket> socket;
-	char buffer[4096];
+	std::vector<char> buffer_;
 public:
 	int host_id;
 

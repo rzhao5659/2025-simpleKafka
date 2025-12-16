@@ -15,80 +15,63 @@
 std::atomic<int> total_consumed(0);
 std::atomic<bool> shutdown_requested(false);
 
-void signal_handler(int signal) {
-    std::cout << "\nShutting down consumers gracefully..." << std::endl;
-    shutdown_requested = true;
-}
 
+// Runs for 10s
 void consumerThread(int consumer_id, const std::string& broker_ip, int broker_port,
     const std::string& topic, bool print_to_file, const std::string& folder) {
-    try {
-        KafkaConsumer consumer(consumer_id, 5, 4096);
-        consumer.fetchClusterMetadata(broker_ip, broker_port);
-        bool success = consumer.subscribe(topic, true, false);
-        if (!success) {
-            std::cerr << "[Consumer " << consumer_id << "] Failed to subscribe" << std::endl;
-            return;
-        }
 
-        std::ofstream outfile;
-        if (print_to_file) {
-            std::string filename = folder + "/consumer_" + std::to_string(consumer_id) + ".txt";
-            outfile.open(filename);
-        }
+    KafkaConsumer consumer(consumer_id, 10, 4096);
+    consumer.fetchClusterMetadata(broker_ip, broker_port);
+    bool success = consumer.subscribe(topic, true, false);
+    if (!success) {
+        std::cerr << "[Consumer " << consumer_id << "] Failed to subscribe" << std::endl;
+        return;
+    }
 
-        while (!shutdown_requested) {
-            std::vector<ConsumerRecordBatch> record_batches = consumer.poll(1);
+    std::ofstream outfile;
+    if (print_to_file) {
+        std::string filename = folder + "/consumer_" + std::to_string(consumer_id) + ".txt";
+        outfile.open(filename);
+    }
 
-            for (const auto& consumer_rb : record_batches) {
-                const RecordBatch& rb = consumer_rb.record_batch;
+    const auto start = std::chrono::steady_clock::now();
+    const auto duration = std::chrono::seconds(10);
 
-                if (rb.getNumRecords() != 0) {
-                    for (const auto& record : rb.records) {
-                        if (print_to_file) {
-                            outfile << consumer_rb.topic << ","
-                                << consumer_rb.partition << ","
-                                << record.key << ","
-                                << record.value << std::endl;
-                        } else {
-                            std::cout << "[Consumer " << consumer_id << "] "
-                                << consumer_rb.topic << ","
-                                << consumer_rb.partition << ","
-                                << record.key << ","
-                                << record.value << std::endl;
-                        }
-                        total_consumed++;
+    while (std::chrono::steady_clock::now() - start < duration) {
+        std::vector<ConsumerRecordBatch> record_batches = consumer.poll(1);
+
+        for (const auto& consumer_rb : record_batches) {
+            const RecordBatch& rb = consumer_rb.record_batch;
+
+            if (rb.getNumRecords() != 0) {
+                for (const auto& record : rb.records) {
+                    if (print_to_file) {
+                        outfile << consumer_rb.topic << ","
+                            << consumer_rb.partition << ","
+                            << record.key << ","
+                            << record.value << std::endl;
+                    } else {
+                        std::cout << "[Consumer " << consumer_id << "] "
+                            << consumer_rb.topic << ","
+                            << consumer_rb.partition << ","
+                            << record.key << ","
+                            << record.value << std::endl;
                     }
+                    total_consumed++;
                 }
             }
         }
-
-        if (print_to_file) {
-            outfile.close();
-        }
     }
-    catch (const std::exception& e) {
-        std::cerr << "[Consumer " << consumer_id << "] Error: " << e.what() << std::endl;
+
+    if (print_to_file) {
+        outfile.close();
     }
 }
 
-void statsThread() {
-    while (!shutdown_requested) {
-        std::this_thread::sleep_for(std::chrono::seconds(10));
 
-        int count = total_consumed.exchange(0);
-        double throughput = count / 10.0;
-
-        auto now = std::chrono::system_clock::now();
-        auto timestamp = std::chrono::system_clock::to_time_t(now);
-
-        std::cout << "[" << timestamp << "] Throughput: " << throughput << " msg/s" << std::endl;
-    }
-}
 
 int main(int argc, char* argv[]) {
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    signal(SIGPIPE, SIG_IGN);
 
     if (argc != 7) {
         std::cout << "Usage: " << argv[0] << " <N_consumers> <topic> <print_to_file> <folder> <broker_ip> <broker_port>" << std::endl;
@@ -118,9 +101,6 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "========================================\n" << std::endl;
 
-    std::thread stats(statsThread);
-    stats.detach();
-
     std::vector<std::thread> consumers;
     for (int i = 0; i < N; i++) {
         consumers.emplace_back(consumerThread, 200 + i, broker_ip, broker_port,
@@ -131,5 +111,7 @@ int main(int argc, char* argv[]) {
         t.join();
     }
 
+    double throughput = total_consumed / 10.0;
+    std::cout << "Consumer Throughput: " << throughput << " msg/s" << std::endl;
     return 0;
 }
