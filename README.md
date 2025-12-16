@@ -13,7 +13,9 @@ There is a cluster formed by multiple **Brokers** and a **Controller**, which to
 
 ## Design
 
-Presentation, report, and demo can be found here:
+Presentation (covers key design only) can be found in `docs` folder.
+
+Video Demo: https://www.youtube.com/watch?v=OSW_T79WN4Q 
 
 
 Due to time constraint, there are tons of simplifications from real Kafka implementation and weaker assumptions. 
